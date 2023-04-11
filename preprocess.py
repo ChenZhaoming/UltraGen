@@ -15,7 +15,7 @@ ope=os.path.exists
 data_dir = '/home/zmchen/project/pretrain/data/conventional_selex'
 
 
-d_complement = {'A': 'T', 'T':'A', 'G': 'C', 'C': 'G'}
+d_complement = {'A': 'T', 'T':'A', 'G': 'C', 'C': 'G', 'N': 'N'}
 
 
 def get_reverse_complement(seq):
