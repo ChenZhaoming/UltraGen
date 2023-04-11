@@ -5,6 +5,7 @@ import difflib
 from Bio import SeqIO
 import pandas as pd
 import numpy as np
+from collections import defaultdict
 from tqdm import tqdm
 import argparse
 from multiprocessing import Pool
@@ -27,7 +28,8 @@ def get_reverse_complement(seq):
     Returns:
       Reversed complementary string:
     """
-    return ''.join([d_complement[base] for base in seq[::-1]])
+    #return ''.join([d_complement[base] for base in seq[::-1]])
+    return "".join(d_complement.get(base, base) for base in reversed(seq))
 
 
 def fastq_parse(file_path):
@@ -42,18 +44,22 @@ def fastq_parse(file_path):
         * 'len': length of parsed sequence
         * 'cnt': number of parsed sequence
     """
-    d_parse = {}
+#     d_parse = {}
+    d_parse = defaultdict(int)
     for seq_record in SeqIO.parse(file_path, 'fastq'):
         ## get sequence from SeqIO
         seq = str(seq_record.seq)
-        if seq not in d_parse.keys():
-            d_parse[seq] = {}
-            d_parse[seq]['len'] = len(seq)
-            d_parse[seq]['cnt'] = 0
+#         if seq not in d_parse.keys():
+#             d_parse[seq] = {}
+#             d_parse[seq]['len'] = len(seq)
+#             d_parse[seq]['cnt'] = 0
         ## the same sequence may appear many times
-        d_parse[seq]['cnt'] += 1
+        d_parse[seq] += 1
     # return file in dataframe format
-    return pd.DataFrame.from_dict(d_parse, orient='index', columns=['len', 'cnt'])
+    output_data_frame = pd.DataFrame.from_dict(d_parse, orient='index', columns=['cnt'])
+    output_data_frame['len'] = output_data_frame.index.map(lambda x: len(x))
+#     return pd.DataFrame.from_dict(d_parse, orient='index', columns=['len', 'cnt'])
+    return output_data_frame
 
 
 def batch_load(file_dir):
