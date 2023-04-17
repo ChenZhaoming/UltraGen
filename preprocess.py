@@ -14,11 +14,7 @@ from multiprocessing import Pool
 opj=os.path.join
 ope=os.path.exists
 
-data_dir = '/home/zmchen/project/pretrain/data/conventional_selex'
-
-
 d_complement = {'A': 'T', 'T':'A', 'G': 'C', 'C': 'G', 'N': 'N'}
-
 
 def get_reverse_complement(seq):
     """Function to get reverse complementary of input sequence
@@ -136,18 +132,15 @@ def get_optimal_match(pattern, seq, midmin, midmax, end):
       best matched sequence
     """
     ## for primer_A, find longest match, while for primer_B, find match that meets the length requirement of random_region
-    # match_pattern_end = ",})" if end == 'head' else ","+str(midmax)+"})([ATGCN]{0,})"
     match_pattern_end = ",})" if end == 'head' else ","+str(midmax)+"})"
     ## full match
-    # re_pattern = re.compile(r"([ATGCN]{0,})("+pattern+")([ATGCN]{"+str(midmin)+","+str(midmax)+"})([ATGCN]{0,})")
     re_pattern = re.compile(r"([ATGCN]{0,})("+pattern+")([ATGCN]{"+str(midmin)+match_pattern_end)
     matchs = re.search(re_pattern, seq)
     if matchs:
         primer = matchs.group(1) + matchs.group(2)
-        # randme = matchs.group(3) if end =='head' else matchs.group(3) + matchs.group(4)
         randme = matchs.group(3)
         return primer, randme
-    ## two situations that causue unmatch:
+    ## two situations that cause unmatch:
     ## 1. the length of target sequence does not satisfy the minimal requirement of full match. (len(pattern) + midmin > len(seq))
     ##    this may due to truncation of pattern sequence
     ## 2. there are some mistake in pattern
@@ -164,9 +157,7 @@ def get_optimal_match(pattern, seq, midmin, midmax, end):
         re_pattern = re.compile(r"([ATGCN]{0,})("+ptn+")([ATGCN]{"+str(midmin)+match_pattern_end)
         matchs = re.search(re_pattern, seq)
         if matchs:
-            # return matchs.group(1) + matchs.group(2), matchs.group(3) if end =='head' else matchs.group(1) + matchs.group(2), matchs.group(3) + matchs.group(4)
             primer = matchs.group(1) + matchs.group(2)
-            # randme = matchs.group(3) if end =='head' else matchs.group(3) + matchs.group(4)
             randme = matchs.group(3)
             return primer, randme
     # ## remove one residue in pattern, e.g. ATG -> AG
@@ -192,9 +183,7 @@ def get_optimal_match(pattern, seq, midmin, midmax, end):
         re_pattern = re.compile(r"([ATGCN]{0,})("+ptn+")([ATGCN]{"+str(midmin)+match_pattern_end)
         matchs = re.search(re_pattern, seq)
         if matchs:
-            # return matchs.group(1) + matchs.group(2), matchs.group(3) if end =='head' else matchs.group(1) + matchs.group(2), matchs.group(3) + matchs.group(4)
             primer = matchs.group(1) + matchs.group(2)
-            # randme = matchs.group(3) if end =='head' else matchs.group(3) + matchs.group(4)
             randme = matchs.group(3)
             return primer, randme
     return False
@@ -268,9 +257,19 @@ def get_two_end_match(patternA, patternB, seq, midmin, midmax):
 
 
 def motif_extract(df_parse, term_5, term_3, midmin=-1, midmax=-1, fulllen=None, motif_lens=10, len_cutoff=0.9, reverse='reverse'):
-    """
-    term_5: pattern sequence in the 5' terminal
-    term_3: pattern sequence in the 3' terminal
+    """Function to extract motif for input sequences
+
+    Args:
+      df_parse: pandas.DataFrame stores original sequences
+      term_5: primer_A, namely pattern sequence in the 5' terminal
+      term_3: primer_B, namely pattern sequence in the 3' terminal
+      midmin: the minimal length requirement of random_region
+      midmax: the maximal length requirement of random_region
+      motif_lens: the maximal length of motif utilized for fuzzy match
+      reverse: whether to reverse the sequence pattern to be matched
+
+    Returns:
+      best matched sequence
     """
     ## patterns
     head = get_reverse_complement(term_3) if reverse == 'reverse' else term_5
@@ -328,18 +327,65 @@ def motif_extract(df_parse, term_5, term_3, midmin=-1, midmax=-1, fulllen=None, 
 
 
 def multi_extract(ite, input_data, args):
+    """Function to run motif extraction in N processes
+
+    Args:
+      ite: unique identifier for a specific run
+      input_data: data to be processed in this specific run
+      args: args utilized in motif_extract
+
+    Returns:
+      dict stores results from N processed
+    """
     df_rst = motif_extract(input_data, term_5=args.term_5, term_3=args.term_3, midmin=args.midmin, midmax=args.midmax, motif_lens=args.motif_lens, reverse=args.reverse)
     return {ite: df_rst}
 
+
 def data_preparation(processes_count, df_input):
+    """Function to split input data into N parts
+
+    Args:
+      processes_count: the number of CPUs
+      df_input: pandas.DataFrame that stores the full data
+
+    Returns:
+      dict stores N parts of data
+    """
+    ## split data into N parts and stores into a list
     l_split = np.array_split(df_input, processes_count)
+    ## save N parts data into a dict
     d_pool = {str(i): l_split[i] for i in range(len(l_split))}
     return d_pool
+
+
+def quality_eval(df_result, args):
+    """Function to evaluate the extraction quality
+
+    Args:
+      df_result: pandas.DataFrame that stores the extracted result
+
+    Returns:
+      None
+    """
+    full_lens = df_result.shape[0]
+    extracted = df_result.loc[df_result['quality'] > 0].shape[0]
+    print('There are {} sequences in orinal file, from which {} sequences satisfy the standard of motif extraction, and the screening rate is {}'.format(full_lens, extracted, extracted/full_lens))
+    if args.full_lens > 0:
+        ## length lower bound, 10% cutoff
+        lens_lower_bound = math.floor(args.full_lens * 0.9)
+        ## length upper bound, 10% cutoff
+        lens_upper_bound = math.ceil(args.full_lens * 1.1)
+        ## extract the sequences that satisfy the length requirement
+        df_result_part = df_result.loc[df_result['len'] > lens_lower_bound].loc[df_result['len'] < lens_upper_bound]
+        part_lens = df_result_part.shape[0]
+        extracted = df_result_part.loc[df_result_part['quality'] > 0].shape[0]
+        print('There are {} sequences in standard file, from which {} sequences satisfy the standard of motif extraction, and the screening rate is {}'.format(part_lens, extracted, extracted/part_lens))
+
 
 def main(args):
     ## time record
     time_old = datetime.datetime.now()
-
+    ## check input args
     assert args.file_parse is not None or args.input_dir is not None
     ## parse sequences from fastq file(s)
     if args.file_parse is not None:
@@ -355,24 +401,40 @@ def main(args):
         ## run in multiple cpus
         else:
             processes_pool = Pool(args.cpu_num)
-            
+            ## split original data into N parts according to the cpu number
             d_pool = data_preparation(args.cpu_num, df_data)
-
+            ## run motif extraction in multi-process
             results = [processes_pool.apply_async(multi_extract, args=(ite, input_data, args)) for ite, input_data in d_pool.items()]
             
             results_new = [p.get() for p in results]
-
+            ## merge results of N processes into one dataframe
             l_result_list = []
-
             for result in results_new:
                 for ite in result.keys():
                     l_result_list.append(result[ite])
-            
             df_rst = pd.concat(l_result_list, axis=0)
         
+        ## evaluate the extraction quality
+        quality_eval(df_rst, args)
+
+        ## save final result
+        if args.save_final is not None:
+            df_final = df_rst.loc[df_rst['quality'] > 0]
+            l_motif = [get_reverse_complement(seq) for seq in df_final['middle'].tolist()] if args.reverse == 'reverse' else df_final['middle'].tolist()
+            df_final.insert(loc=0, column='motif', value=l_motif)
+            df_final = df_final.set_index('motif').loc[:, df_data.columns.tolist()[:-1]]
+            # d_quality = dict(zip(df_final.index.tolist(), df_final['quality'].tolist()))
+            # for idx in df_final.index.tolist():
+            #     if df_final.loc[idx, 'quality'] > d_quality[idx]:
+            #         d_quality[idx] = df_final.loc[idx, 'quality']
+            df_final = df_final.groupby('motif').sum()
+            # for idx in df_final.index.tolist():
+            #     df_final.loc[idx, 'quality'] = d_quality[idx]
+            df_final.to_csv(args.save_final)
+
         df_data = df_rst.copy()
     
-    ## save file
+    ## save raw file
     if args.output_dir is not None:
         df_data.to_csv(args.output_dir)
 
@@ -417,8 +479,16 @@ if __name__ == "__main__":
         help='''minimal length of the recognized motif in 5'- or 3' terminal'''
     )
     parser.add_argument(
+        "--full_lens", type=int, default=0,
+        help='''the desired length of a given sequence that consists of sys_seq, primer_A, random_region, primer_B, sys_seq'''
+    )
+    parser.add_argument(
         "--reverse", type=str, 
         help='''if reverse'''
+    )
+    parser.add_argument(
+        "--save_final", type=str, default=None,
+        help='''File dir to save final result'''
     )
     parser.add_argument(
         "--cpu_num", type=int, default=1,
