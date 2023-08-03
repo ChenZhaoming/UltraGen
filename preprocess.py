@@ -70,7 +70,9 @@ def batch_load(file_dir):
     l_lens = []
 
     ## load fastq file in dataframe format and store in a dict
-    for file in os.listdir(file_dir):
+    for file in tqdm(os.listdir(file_dir)):
+        if not file.endswith('fastq'):
+            continue
         d_parse[file.split('.')[0]] = fastq_parse(opj(file_dir, file))
 
     ## get the full set of parsed sequence
@@ -86,6 +88,7 @@ def batch_load(file_dir):
     df_merge = df_merge.set_index(['seq'])
 
     ## merge the parsed dataframe into one final dataframe
+    print('Merging parsed raw sequences into one csv file...')
     for k, v in tqdm(d_parse.items()):
         for seq in v.index.tolist():
             df_merge.loc[seq, k] = df_merge.loc[seq, k] + v.loc[seq, 'cnt']
@@ -150,7 +153,8 @@ def get_optimal_match(pattern, seq, midmin, midmax, end):
     ## replace each residue in pattern with [ATGCN]{0,2}, e.g. ATG -> A[ATGCN]{0,2}G (ATG -> ACG, ATG -> AG, ATG -> ATCG)
     ## matching the replacement, insertion, and deletion incidence of a single residue
     # pattern_mismatch = list(set([pattern[:i]+'[ATGCN]{0,2}'+pattern[i+1:] for i in range(len(pattern))]))
-    pattern_mismatch = [pattern[:i]+'[ATGCN]{0,2}'+pattern[i+1:] for i in range(len(pattern))]
+    # pattern_mismatch = [pattern[:i]+'[ATGCN]{0,2}'+pattern[i+1:] for i in range(len(pattern))]
+    pattern_mismatch = [pattern[:i]+'[ATGCN]{0,2}'+pattern[i+1:] if i!=0 and i!=len(pattern)-1 else pattern[:i]+'[ATGCN]{1}'+pattern[i+1:] for i in range(len(pattern))]
     for ptn in pattern_mismatch:
         # re_pattern = re.compile(r"([ATGCN]{0,})("+ptn+")([ATGCN]{"+str(midmin)+",})")
         # re_pattern = re.compile(r"([ATGCN]{0,})("+ptn+")([ATGCN]{"+str(midmin)+","+str(midmax)+"})([ATGCN]{0,})")
@@ -244,7 +248,10 @@ def get_two_end_match(patternA, patternB, seq, midmin, midmax):
         return matchs.group(1) + matchs.group(2), matchs.group(3), matchs.group(4) + matchs.group(5)
     
     ## random replace one residue in patternA or patternB with [ATGCN]{0,2}
-    pattern_mismatch = ["("+patternA[:i]+"[ATGCN]{0,2}"+patternA[i+1:]+")([ATGCN]{"+str(midmin)+","+str(midmax)+"})("+patternB[:j]+"[ATGCN]{0,2}"+patternB[j+1:]+")" for i in range(len(patternA)) for j in range(len(patternB))]
+    # pattern_mismatch = ["("+patternA[:i]+"[ATGCN]{0,2}"+patternA[i+1:]+")([ATGCN]{"+str(midmin)+","+str(midmax)+"})("+patternB[:j]+"[ATGCN]{0,2}"+patternB[j+1:]+")" for i in range(len(patternA)) for j in range(len(patternB))]
+    # pattern_mismatch = ["("+patternA[:i]+"[ATGCN]{0,2}"+patternA[i+1:]+")([ATGCN]{"+str(midmin)+","+str(midmax)+"})("+patternB[:j]+"[ATGCN]{0,2}"+patternB[j+1:]+")" for i in range(1,len(patternA)-1) for j in range(1,len(patternB)-1)]
+    ## random replace one residue in patternA or patternB with [ATGCN]{1}
+    pattern_mismatch = ["("+patternA[:i]+"[ATGCN]{1}"+patternA[i+1:]+")([ATGCN]{"+str(midmin)+","+str(midmax)+"})("+patternB[:j]+"[ATGCN]{1}"+patternB[j+1:]+")" for i in range(len(patternA)) for j in range(len(patternB))]
     for ptn in pattern_mismatch:
         # re_pattern = re.compile(r"([ATGCN]{0,})"+ptn+"([ATGCN]{0,})")
         re_pattern = re.compile(r"([ATGCN]{0,})"+ptn)
@@ -272,8 +279,12 @@ def motif_extract(df_parse, term_5, term_3, midmin=-1, midmax=-1, fulllen=None, 
       best matched sequence
     """
     ## patterns
+    term_5 = term_5 if term_5 is not None else ''
+    term_3 = term_3 if term_3 is not None else ''
     head = get_reverse_complement(term_3) if reverse == 'reverse' else term_5
     tail = get_reverse_complement(term_5) if reverse == 'reverse' else term_3
+
+    match_two_end = 1 if len(head) > 0 and len(tail) > 0 else 0
 
     l_pre = []
     l_suf = []
@@ -288,7 +299,8 @@ def motif_extract(df_parse, term_5, term_3, midmin=-1, midmax=-1, fulllen=None, 
         quality = 0
 
         ## try to find matches in two ends
-        if len(seq) >= len(head) + midmin + len(tail):
+        # if len(seq) >= len(head) + midmin + len(tail) and len(seq) <= len(head) + midmax + len(tail):
+        if len(seq) >= len(head) + midmin + len(tail) and match_two_end:
             matchs = get_two_end_match(head, tail, seq, midmin, midmax)
             if matchs:
                 ## system_seq + primerA
@@ -303,11 +315,11 @@ def motif_extract(df_parse, term_5, term_3, midmin=-1, midmax=-1, fulllen=None, 
         ## the length of target sequence does not meet the requirement, or can not find match in both ends
         if quality == 0:
             ## find match in primer_A, the minimal length of recognized motif is 8
-            matchA = get_one_end_match(head, seq, midmin, midmax, cutoffmin=8, cutoffmax=motif_lens, end='head')
-            prefix, middle = matchA if matchA else ('-', seq)
+            matchA = get_one_end_match(head, seq, midmin, midmax, cutoffmin=8, cutoffmax=motif_lens, end='head') if len(head) > 0 else True
+            prefix, middle = matchA if matchA and len(head) > 0 else ('-', seq)
             ## find match in primer_B, the minimal length of recognized motif is 6
-            matchB = get_one_end_match(tail[::-1], middle[::-1], midmin, midmax, cutoffmin=6, cutoffmax=motif_lens, end='tail')
-            suffix, middle = (matchB[0][::-1], matchB[1][::-1]) if matchB else ('-', middle)
+            matchB = get_one_end_match(tail[::-1], middle[::-1], midmin, midmax, cutoffmin=8, cutoffmax=motif_lens, end='tail') if len(tail) > 0 else True
+            suffix, middle = (matchB[0][::-1], matchB[1][::-1]) if matchB and len(tail) > 0 else ('-', middle)
             ## quality is assigned 1 if both primer_A and primer_B were matched and random_motif meets the length requirement
             quality = 1 if matchA and matchB and len(middle) >= midmin and len(middle) <= midmax else 0
 
@@ -382,6 +394,22 @@ def quality_eval(df_result, args):
         print('There are {} sequences in standard file, from which {} sequences satisfy the standard of motif extraction, and the screening rate is {}'.format(part_lens, extracted, extracted/part_lens))
 
 
+def check_args(args):
+    """Function to check args
+
+    Args:
+      args: args utilized in motif_extract
+
+    Returns:
+      True if args satisfies the standard
+    """
+    if args.midmin <= -1 or args.midmax <= -1:
+        return False
+    if args.term_5 is None and args.term_3 is None:
+        return False
+    return True
+
+
 def main(args):
     ## time record
     time_old = datetime.datetime.now()
@@ -389,17 +417,21 @@ def main(args):
     assert args.file_parse is not None or args.input_dir is not None
     ## parse sequences from fastq file(s)
     if args.file_parse is not None:
+        print('Parsing raw fastq files...')
         df_data = batch_load(args.file_parse) if os.path.isdir(args.file_parse) else fastq_parse(args.file_parse)
     ## load parsed sequences from csv file
     else:
+        print('Loading parsed sequences from csv file...')
         df_data = pd.read_csv(args.input_dir).set_index('seq')
     ## run motif extraction
-    if args.term_5 is not None and args.term_3 is not None and args.midmin > -1 and args.midmax > -1:
+    if check_args(args):
         ## run in single cpu
         if args.cpu_num == 1:
+            print('Running motif extraction in single CPU mode...')
             df_rst = motif_extract(df_data, term_5=args.term_5, term_3=args.term_3, midmin=args.midmin, midmax=args.midmax, motif_lens=args.motif_lens, reverse=args.reverse)
         ## run in multiple cpus
         else:
+            print('Running motif extraction in multiple CPU mode...')
             processes_pool = Pool(args.cpu_num)
             ## split original data into N parts according to the cpu number
             d_pool = data_preparation(args.cpu_num, df_data)
@@ -423,19 +455,14 @@ def main(args):
             l_motif = [get_reverse_complement(seq) for seq in df_final['middle'].tolist()] if args.reverse == 'reverse' else df_final['middle'].tolist()
             df_final.insert(loc=0, column='motif', value=l_motif)
             df_final = df_final.set_index('motif').loc[:, df_data.columns.tolist()[:-1]]
-            # d_quality = dict(zip(df_final.index.tolist(), df_final['quality'].tolist()))
-            # for idx in df_final.index.tolist():
-            #     if df_final.loc[idx, 'quality'] > d_quality[idx]:
-            #         d_quality[idx] = df_final.loc[idx, 'quality']
             df_final = df_final.groupby('motif').sum()
-            # for idx in df_final.index.tolist():
-            #     df_final.loc[idx, 'quality'] = d_quality[idx]
             df_final.to_csv(args.save_final)
 
         df_data = df_rst.copy()
     
     ## save raw file
     if args.output_dir is not None:
+        print('Saving results...')
         df_data.to_csv(args.output_dir)
 
     ## time record
