@@ -93,7 +93,7 @@ def gen_loop(fixed, pad_lens):
         # slice to get sequence with desired length
         sub_seqs = [combined_seq[i:i+target_seq_lens] for i in range(pad_lens + 1)]
         candidate_seqs.extend(sub_seqs)
-    
+
     candidate_with_desired_ss = []
     # predict secondary structure for each candidate sequence
     for seq in list(set(candidate_seqs)):
@@ -181,7 +181,7 @@ def get_single_mutant(seq, flanking_lens, loop_idx):
 
 def get_best_mutant(seq, mutants, loop_idx):
     """ keep the best mutant with the highest levenshteinDistance
-    
+
     Args:
         seq: source sequence
         mutants: list of mutants, current one mutation only
@@ -209,7 +209,7 @@ def get_best_mutant(seq, mutants, loop_idx):
             best_mutant = mutant
             best_ss = ss
             ls_dist = dist
-            
+
     return seq, best_mutant, gt_ss, best_ss, ls_dist
 
 
@@ -239,7 +239,8 @@ def seq2df(results):
     # calculate Levenshtein distance for each row
     # dists = np.array([Levenshtein.distance(item[2], item[3]) for item in np.array(results)]).reshape(-1, 1)
     # change results into dataframe
-    df = pd.DataFrame(np.array(results), columns=['Origin seq', 'Mutated Seq', 'Origin ss', 'Mutated ss', 'Levenshtein']).sort_values(by='Levenshtein', ascending=False, inplace=True)
+    df = pd.DataFrame(results, columns=['Origin seq', 'Mutated Seq', 'Origin ss', 'Mutated ss', 'Levenshtein'])
+    df = df.sort_values(by='Levenshtein', ascending=False, inplace=False)
 
     return df.loc[df['Levenshtein'] > 0, ['Origin seq', 'Mutated Seq', 'Mutated ss', 'Levenshtein']]
 
@@ -247,7 +248,7 @@ def seq2df(results):
 if __name__ == "__main__":
     # # number of seqs to be generated
     # num_seqs = 10000000
-    # # specify ss type, 
+    # # specify ss type,
     # # ssType = '5_term'
     # ssType = '3_term'
     # ## 5_term for .....(((((((((((........))))))))))) and 3_term for (((((((((((........))))))))))).....
@@ -263,7 +264,7 @@ if __name__ == "__main__":
     # # the function gen_combination is not utilized as there will be too many seqs when desired sequence length is long
     # for i in tqdm(range(num_seqs)):
     #     l_pair_candidate.append(gen_paired_seq(seq_lens=11))
-    
+
     # print('generate sequences with {} primer, {} pair, and {} loop candidates'.format(len(l_primer_candidate), len(l_pair_candidate), len(l_loop_candidate)))
     # # sample primers
     # primers = np.char.array(np.random.choice(l_primer_candidate, size=num_seqs, replace=True))
@@ -291,13 +292,11 @@ if __name__ == "__main__":
 
     # NOTE: sequences are pre-generated and can be load directly
     target_seqs = [str(seq_record.seq) for seq_record in SeqIO.parse('/share/project/UltraGen/data/raw/random_generation/CUUGA/stem_loop_CUUGA_5term.fasta', 'fasta')]
-    # target_seqs = [str(seq_record.seq) for seq_record in SeqIO.parse('/share/project/UltraGen/data/raw/random_generation/CUUGA/test.fasta', 'fasta')]
     # target_seqs = [str(seq_record.seq) for seq_record in SeqIO.parse('/share/project/UltraGen/data/raw/random_generation/CUUGA/stem_loop_CUUGA_3term.fasta', 'fasta')]
 
     with mp.Pool(100) as p:
         results = list(tqdm(p.imap(get_mutant, target_seqs), total=len(target_seqs)))
     # change results to dataframe
     df_result = seq2df(results)
-
-    print('Saving generated {} seqs'.format(len(df_result.shape[0])))
+    print('Saving generated {} seqs'.format(len(df_result)))
     df_result.to_csv('/share/project/UltraGen/data/raw/random_generation/CUUGA/CUUG_5term.csv', index=False)
