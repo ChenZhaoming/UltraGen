@@ -6,6 +6,8 @@ import re
 import itertools
 import Levenshtein
 import multiprocessing as mp
+import numpy as np
+import pandas as pd
 from tqdm import tqdm
 from Bio import SeqIO
 
@@ -14,7 +16,9 @@ NT_complement = {'A': 'U', 'U':'A', 'G': 'C', 'C': 'G'}
 
 NTs = [k for k,v in NT_complement.items()]
 
-paired_NTs = ['AU', 'UA', 'CG', 'GC', 'GU']
+paired_NTs = ['AU', 'UA', 'CG', 'GC', 'GU', 'UG']
+
+desired_ss = {'5_term': '.....(((((((((((........)))))))))))', '3_term': '(((((((((((........))))))))))).....'}
 
 
 def levenshteinDistance(qSeq, sSeq):
@@ -46,11 +50,11 @@ def gen_random(lens):
     return ''.join([random.sample(NTs, 1)[0] for i in range(lens)])
 
 
-def gen_paired_seq(lens):
+def gen_paired_seq(seq_lens):
     """ generate paired sequences with desired length
 
     Args:
-        lens: desired sequence length
+        seq_lens: desired sequence length
 
     Return:
         generated sequence, reverse complementary of generated sequence
@@ -58,7 +62,7 @@ def gen_paired_seq(lens):
     l_left_seq = []
     l_right_seq = []
     # randomly sample a pair of NTs at a time
-    for i in range(lens):
+    for i in range(seq_lens):
         pair = random.sample(paired_NTs, 1)[0]
         l_left_seq.append(pair[0])
         l_right_seq.append(pair[1])
@@ -98,6 +102,12 @@ def gen_loop(fixed, pad_lens):
             candidate_with_desired_ss.append(seq)
 
     return candidate_with_desired_ss
+
+
+def rnafold(seq):
+    """ get ss in dot-bracket format
+    """
+    return RNA.fold(seq)[0]
 
 
 def check_ss_valid(sec_struc):
@@ -170,7 +180,7 @@ def get_single_mutant(seq, flanking_lens, loop_idx):
 
 
 def get_best_mutant(seq, mutants, loop_idx):
-    """ keep the best mutant with the lowest energy
+    """ keep the best mutant with the highest levenshteinDistance
     
     Args:
         seq: source sequence
@@ -181,24 +191,35 @@ def get_best_mutant(seq, mutants, loop_idx):
         soruce sequence, mutated sequence
     """
     loop_lens = 8
-    min_energy = 0
-    best_mutant = ''
+    ls_dist = 0
+    best_mutant = seq
+    keyMotif = 'CUUG'
+    gt_ss = RNA.fold(seq)[0]
+    best_ss = gt_ss
     for mutant in mutants:
         ss, energy = RNA.fold(mutant)
+        offset = seq[loop_idx:loop_idx+loop_lens].index(keyMotif)
+        # both loop and motif region are unpaired in the origin
+        loop_ss = ss[loop_idx:loop_idx+loop_lens]
+        motif_ss = ss[loop_idx+offset:loop_idx+offset+len(keyMotif)]
+        # calculate levenshteinDistance
+        dist = levenshteinDistance(gt_ss, ss)
         # mutant with desired secondary structure and lower energy
-        if check_ss_valid(ss[loop_idx:loop_idx+loop_lens]) and energy < min_energy:
+        if check_ss_valid(motif_ss) and check_ss_valid(loop_ss) and dist > ls_dist:
             best_mutant = mutant
-            min_energy = energy
-    return seq, best_mutant
+            best_ss = ss
+            ls_dist = dist
+            
+    return seq, best_mutant, gt_ss, best_ss, ls_dist
 
 
 def get_mutant(seq):
     """ function for multiprocessing
     """
     ## processing seqs with random region in 5' terminal
-    # loop_idx = 16
+    loop_idx = 16
     ## processing seqs with random region in 3' terminal
-    loop_idx = 11
+    # loop_idx = 11
     l_single_mutant = get_single_mutant(seq, flanking_lens=5, loop_idx=loop_idx)
     return get_best_mutant(seq, l_single_mutant, loop_idx=loop_idx)
 
@@ -212,72 +233,71 @@ def seq2fasta(seqs, save_dir):
             fp.write(seqs[i] + '\n')
 
 
+def seq2df(results):
+    """ change result into dataframe
+    """
+    # calculate Levenshtein distance for each row
+    # dists = np.array([Levenshtein.distance(item[2], item[3]) for item in np.array(results)]).reshape(-1, 1)
+    # change results into dataframe
+    df = pd.DataFrame(np.array(results), columns=['Origin seq', 'Mutated Seq', 'Origin ss', 'Mutated ss', 'Levenshtein']).sort_values(by='Levenshtein', ascending=False, inplace=True)
+
+    return df.loc[df['Levenshtein'] > 0, ['Origin seq', 'Mutated Seq', 'Mutated ss', 'Levenshtein']]
+
+
 if __name__ == "__main__":
-    # l_loop_candidate = loop_gen('CUUGA', 3)
-    # ## totally 1024 candidates
-    # l_primer_candidate = gen_combination(NTs, 5)
+    # # number of seqs to be generated
+    # num_seqs = 10000000
+    # # specify ss type, 
+    # # ssType = '5_term'
+    # ssType = '3_term'
+    # ## 5_term for .....(((((((((((........))))))))))) and 3_term for (((((((((((........))))))))))).....
+    # ssTemplate = desired_ss[ssType]
+
+    # print('prepare samping pools for each components')
+    # ## 256 candidates
+    # l_loop_candidate = gen_loop(fixed='CUUGA', pad_lens=3)
+    # ## 1024 candidates
+    # l_primer_candidate = gen_combination(pools=NTs, repeats=5)
 
     # l_pair_candidate = []
     # # the function gen_combination is not utilized as there will be too many seqs when desired sequence length is long
-    # for i in tqdm(range(1000000)):
-    #     l_pair_candidate.append(gen_paired_seq(11))
-
-    # ######################## generate sequences with random region in 5' terminal ########################
-    # seqs_with_random_in_5term = []
-    # ## primer in 5' term, 1 million seqs generated
-    # for i in tqdm(range(1000000)):
-    #     primer = random.sample(l_primer_candidate, 1)[0]
-    #     left_pair, right_pair = random.sample(l_pair_candidate, 1)[0]
-    #     loop = random.sample(l_loop_candidate, 1)[0]
-    #     seqs_with_random_in_5term.append(primer + left_pair + loop + right_pair)
-
-    # l_seq_candidate = []
-    # # desired_sec = '.....((((((((((((......))))))))))))'
-    # for seq in tqdm(list(set(seqs_with_random_in_5term))):
-    #     sec_struc = RNA.fold(seq)[0]
-    #     # full match
-    #     if sec_struc == '.....(((((((((((........)))))))))))':
-    #         l_seq_candidate.append(seq)
-
-    # seq2fasta(l_seq_candidate, '/share/project/UltraGen/data/raw/random_generation/CUUGA/stem_loop_CUUGA_primer5.fasta')
-
-    # ######################## generate sequences with random region in 3' terminal ########################
+    # for i in tqdm(range(num_seqs)):
+    #     l_pair_candidate.append(gen_paired_seq(seq_lens=11))
     
-    # seqs_with_random_in_3term = []
-    # ## primer in 3' term, 1 million seqs generated
-    # for i in tqdm(range(1000000)):
-    #     primer = random.sample(l_primer_candidate, 1)[0]
-    #     left_pair, right_pair = random.sample(l_pair_candidate, 1)[0]
-    #     loop = random.sample(l_loop_candidate, 1)[0]
-    #     seqs_with_random_in_3term.append(left_pair + loop + right_pair + primer)
+    # print('generate sequences with {} primer, {} pair, and {} loop candidates'.format(len(l_primer_candidate), len(l_pair_candidate), len(l_loop_candidate)))
+    # # sample primers
+    # primers = np.char.array(np.random.choice(l_primer_candidate, size=num_seqs, replace=True))
+    # # sample pairs
+    # pairs = random.sample(l_pair_candidate, num_seqs)
+    # left_pairs = np.char.array(np.array(pairs)[:, 0])
+    # right_pairs = np.char.array(np.array(pairs)[:, 1])
+    # # sample loops
+    # loops = np.char.array(np.random.choice(l_loop_candidate, size=num_seqs, replace=True))
+    # # concatenate components to get full seqs
+    # seqPools = list(primers + left_pairs + loops + right_pairs) if ssType == '5_term' else list(left_pairs + loops + right_pairs + primers)
+    # # predict ss for generated seqs
+    # print('run ss prediction')
+    # with mp.Pool(100) as p:
+    #     ssPools = list(tqdm(p.imap(rnafold, seqPools), total=len(seqPools)))
 
+    # assert len(seqPools) == len(ssPools)
+    # # screen seqs with desired ss
     # l_seq_candidate = []
-    # # desired_sec = '((((((((((((......)))))))))))).....'
-    # for seq in tqdm(list(set(seqs_with_random_in_3term))):
-    #     sec_struc = RNA.fold(seq)[0]
-    #     # full match
-    #     if sec_struc == '.....(((((((((((........)))))))))))':
-    #         l_seq_candidate.append(seq)
+    # for i in range(len(seqPools)):
+    #     if ssPools[i] == ssTemplate:
+    #         l_seq_candidate.append(seqPools[i])
+    # ## save generated seqs into a fasta file
+    # seq2fasta(l_seq_candidate, '/share/project/UltraGen/data/raw/random_generation/CUUGA/stem_loop_CUUGA_primer3_0926_v2.fasta')
 
-    # seq2fasta(l_seq_candidate, '/share/project/UltraGen/data/raw/random_generation/CUUGA/stem_loop_CUUGA_primer3.fasta')
-
-    ## NOTE: sequences are pre-generated and can be load directly
-    # target_seqs = [str(seq_record.seq) for seq_record in SeqIO.parse('/share/project/UltraGen/data/raw/random_generation/CUUGA/stem_loop_CUUGA_primer5.fasta', 'fasta')]
-    target_seqs = [str(seq_record.seq) for seq_record in SeqIO.parse('/share/project/UltraGen/data/raw/random_generation/CUUGA/stem_loop_CUUGA_primer3.fasta', 'fasta')]
+    # NOTE: sequences are pre-generated and can be load directly
+    target_seqs = [str(seq_record.seq) for seq_record in SeqIO.parse('/share/project/UltraGen/data/raw/random_generation/CUUGA/stem_loop_CUUGA_5term.fasta', 'fasta')]
+    # target_seqs = [str(seq_record.seq) for seq_record in SeqIO.parse('/share/project/UltraGen/data/raw/random_generation/CUUGA/test.fasta', 'fasta')]
+    # target_seqs = [str(seq_record.seq) for seq_record in SeqIO.parse('/share/project/UltraGen/data/raw/random_generation/CUUGA/stem_loop_CUUGA_3term.fasta', 'fasta')]
 
     with mp.Pool(100) as p:
         results = list(tqdm(p.imap(get_mutant, target_seqs), total=len(target_seqs)))
+    # change results to dataframe
+    df_result = seq2df(results)
 
-    l_pos, l_neg = [], []
-
-    for rst in results:
-        if rst[1]:
-            # original sequence with desired secondary structure
-            l_pos.append(rst[0])
-            # mutated sequence without desired secondary structure
-            l_neg.append(rst[1])
-
-    print('Saving generated {} positive seqs and {} negative seqs'.format(len(l_pos), len(l_neg)))
-
-    seq2fasta(l_pos, '/share/project/UltraGen/data/raw/random_generation/CUUGA/pos_primer3.fasta')
-    seq2fasta(l_neg, '/share/project/UltraGen/data/raw/random_generation/CUUGA/neg_primer3.fasta')
+    print('Saving generated {} seqs'.format(len(df_result.shape[0])))
+    df_result.to_csv('/share/project/UltraGen/data/raw/random_generation/CUUGA/CUUG_5term.csv', index=False)
