@@ -40,7 +40,6 @@ def fastq_parse(file_path):
         * 'len': length of parsed sequence
         * 'cnt': number of parsed sequence
     """
-#     d_parse = {}
     d_parse = defaultdict(int)
     for seq_record in SeqIO.parse(file_path, 'fastq'):
         ## get sequence from SeqIO
@@ -49,7 +48,13 @@ def fastq_parse(file_path):
         d_parse[seq] += 1
     # return file in dataframe format
     output_data_frame = pd.DataFrame.from_dict(d_parse, orient='index', columns=['cnt'])
-    output_data_frame['len'] = output_data_frame.index.map(lambda x: len(x))
+    ## NOTE: should be adjust accoding to different situations
+    # l_parse = []
+    # for seq_record in SeqIO.parse(file_path, 'fastq'):
+    #     seq = str(seq_record.seq)
+    #     l_parse.append(seq)
+    # output_data_frame = pd.DataFrame(l_parse, columns=['seq']).set_index('seq')
+    # output_data_frame['len'] = output_data_frame.index.map(lambda x: len(x))
     return output_data_frame
 
 
@@ -142,7 +147,8 @@ def get_optimal_match(pattern, seq, midmin, midmax, end):
     if matchs:
         primer = matchs.group(1) + matchs.group(2)
         randme = matchs.group(3)
-        return primer, randme
+        if primer + randme == seq:
+            return primer, randme
     ## two situations that cause unmatch:
     ## 1. the length of target sequence does not satisfy the minimal requirement of full match. (len(pattern) + midmin > len(seq))
     ##    this may due to truncation of pattern sequence
@@ -163,7 +169,10 @@ def get_optimal_match(pattern, seq, midmin, midmax, end):
         if matchs:
             primer = matchs.group(1) + matchs.group(2)
             randme = matchs.group(3)
-            return primer, randme
+            if primer + randme == seq:
+                return primer, randme
+            else:
+                continue
     # ## remove one residue in pattern, e.g. ATG -> AG
     # pattern_mismatch = list(set([pattern[:i]+pattern[i+1:] for i in range(len(pattern))]))
     # for ptn in pattern_mismatch:
@@ -189,7 +198,10 @@ def get_optimal_match(pattern, seq, midmin, midmax, end):
         if matchs:
             primer = matchs.group(1) + matchs.group(2)
             randme = matchs.group(3)
-            return primer, randme
+            if primer + randme == seq:
+                return primer, randme
+            else:
+                continue
     return False
 
 
@@ -253,12 +265,13 @@ def get_two_end_match(patternA, patternB, seq, midmin, midmax):
     ## random replace one residue in patternA or patternB with [ATGCN]{1}
     pattern_mismatch = ["("+patternA[:i]+"[ATGCN]{1}"+patternA[i+1:]+")([ATGCN]{"+str(midmin)+","+str(midmax)+"})("+patternB[:j]+"[ATGCN]{1}"+patternB[j+1:]+")" for i in range(len(patternA)) for j in range(len(patternB))]
     for ptn in pattern_mismatch:
-        # re_pattern = re.compile(r"([ATGCN]{0,})"+ptn+"([ATGCN]{0,})")
-        re_pattern = re.compile(r"([ATGCN]{0,})"+ptn)
+        ## NOTE: should be adjust according to different situations
+        re_pattern = re.compile(r"([ATGCN]{0,})"+ptn+"([ATGCN]{0,})")
+        # re_pattern = re.compile(r"([ATGCN]{0,})"+ptn)
         matchs = re.search(re_pattern, seq)
         if matchs:
-            return matchs.group(1) + matchs.group(2), matchs.group(3), matchs.group(4)
-            # return matchs.group(1) + matchs.group(2), matchs.group(3), matchs.group(4) + matchs.group(5)
+            # return matchs.group(1) + matchs.group(2), matchs.group(3), matchs.group(4)
+            return matchs.group(1) + matchs.group(2), matchs.group(3), matchs.group(4) + matchs.group(5)
     ## matched motifs or False
     return False
 
@@ -323,9 +336,14 @@ def motif_extract(df_parse, term_5, term_3, midmin=-1, midmax=-1, fulllen=None, 
             ## quality is assigned 1 if both primer_A and primer_B were matched and random_motif meets the length requirement
             quality = 1 if matchA and matchB and len(middle) >= midmin and len(middle) <= midmax else 0
 
-        l_pre.append(prefix)
-        l_suf.append(suffix)
-        l_mid.append(middle)
+        if reverse == 'reverse':
+            l_pre.append(get_reverse_complement(suffix))
+            l_suf.append(get_reverse_complement(prefix))
+            l_mid.append(get_reverse_complement(middle))
+        else:
+            l_pre.append(prefix)
+            l_suf.append(suffix)
+            l_mid.append(middle)
         l_mid_lens.append(len(middle))
         l_quality.append(quality)
 
@@ -419,6 +437,8 @@ def main(args):
     if args.file_parse is not None:
         print('Parsing raw fastq files...')
         df_data = batch_load(args.file_parse) if os.path.isdir(args.file_parse) else fastq_parse(args.file_parse)
+        ## NOTE: uncommand the following line if raw data is required
+        # df_data.to_csv(args.output_dir.split('.')[0] + '_raw.csv')
     ## load parsed sequences from csv file
     else:
         print('Loading parsed sequences from csv file...')
