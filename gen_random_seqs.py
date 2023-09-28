@@ -83,16 +83,22 @@ def gen_loop(fixed, pad_lens):
     target_seq_lens = len(fixed) + pad_lens
     # generate non-redundant combinations for NTs
     random_seqs = gen_combination(NTs, pad_lens)
-    # generate flanking sequences
-    flanking_seqs = gen_combination(random_seqs, 2)
-
+    
     candidate_seqs = []
-    for flank_seq in flanking_seqs:
-        # [A/C/G/U]{3} fixed [A/C/G/U]{3}
-        combined_seq = flank_seq[:pad_lens] + fixed + flank_seq[-pad_lens:]
-        # slice to get sequence with desired length
-        sub_seqs = [combined_seq[i:i+target_seq_lens] for i in range(pad_lens + 1)]
-        candidate_seqs.extend(sub_seqs)
+
+    for seq in random_seqs:
+        left_lens = random.randint(0, pad_lens)
+        candidate_seqs.append(seq[:left_lens] + fixed + seq[left_lens:])
+    # # generate flanking sequences
+    # flanking_seqs = gen_combination(random_seqs, 2)
+
+    # candidate_seqs = []
+    # for flank_seq in flanking_seqs:
+    #     # [A/C/G/U]{3} fixed [A/C/G/U]{3}
+    #     combined_seq = flank_seq[:pad_lens] + fixed + flank_seq[-pad_lens:]
+    #     # slice to get sequence with desired length
+    #     sub_seqs = [combined_seq[i:i+target_seq_lens] for i in range(pad_lens + 1)]
+    #     candidate_seqs.extend(sub_seqs)
 
     candidate_with_desired_ss = []
     # predict secondary structure for each candidate sequence
@@ -104,10 +110,42 @@ def gen_loop(fixed, pad_lens):
     return candidate_with_desired_ss
 
 
+def pad_seqs(seq):
+    """ padding seq to satisfy length requirement
+    """
+    # total seq length
+    lens = random.randint(50, 60)
+    # left primer length
+    left_lens = random.randint(0, lens-len(seq))
+    # right primer length
+    right_lens = lens-len(seq)-left_lens
+
+    return gen_random(left_lens) + seq + gen_random(right_lens)
+
+
 def rnafold(seq):
     """ get ss in dot-bracket format
     """
     return RNA.fold(seq)[0]
+
+
+def filter_random_seqs(items):
+    """ filter random generated seqs with secondary structure
+    """
+    
+    seq = items[0]
+    ss = items[1]
+
+    re_pattern = re.compile("([\(]{4,})([\.]{5,})([\)]{4,})")
+
+    iter = re.finditer(re_pattern, ss)
+
+    for it in iter:
+        i, j = it.span()
+        # idxs of loop
+        if 'CUUGA' in seq[i+len(it.group(1)):j-len(it.group(3))]:
+            return '1', i, j
+    return '0', 0, 0
 
 
 def check_ss_valid(sec_struc):
@@ -125,6 +163,68 @@ def check_ss_valid(sec_struc):
     if items == ['.']:
         return False
     return True
+
+
+def mutation_event(seq):
+    sourceNTs = [NT for NT in seq]
+    # if exists cuuga motif, 70% probability to mutate this motif
+    if 'CUUGA' in seq and random.random() > 0.20:
+        idx = random.randint(seq.index('CUUGA'), seq.index('CUUGA')+4)
+    else:
+        idx = random.randint(0, len(sourceNTs)-1)
+    
+    event = random.randint(1, 3)
+    # insert
+    if event == 1:
+        sourceNTs[idx] = sourceNTs[idx] + random.sample(NTs, 1)[0]
+    # delete
+    if event == 2:
+        sourceNTs[idx] = ''
+    # revise
+    if event == 3:
+        sourceNTs[idx] = random.sample(list(set(NTs).difference([sourceNTs[idx]])), 1)[0]
+    return ''.join(sourceNTs)
+
+
+def random_mutate_seq(seq):
+    """ random mutate 1-5 NT(s) within the given sequence
+
+    Args:
+        seq: source sequence
+
+    Return:
+        mutated seq
+    """
+    numMuts = random.randint(1, 5)
+
+    for i in range(numMuts):
+        seq = mutation_event(seq)
+
+    return seq
+
+
+def seqPartition(seqs, sec_strucs):
+    # 1,2,3 represent one positive set and two negative sets, in which group2 are seqs without CUUGA, and group3 are seqs with paired CUUGA
+    group1, group2, group3 = [], [], []
+
+    for idx in range(len(seqs)):
+        seq = seqs[idx]
+        ss = sec_strucs[idx]
+        if 'CUUGA' not in seq:
+            group2.append(seq)
+        else:
+            # may be more than one CUUGA motif
+            iter = re.finditer(re.compile("CUUGA"), seq)
+            for it in iter:
+                i, j = it.span()
+                if ss[i:j].count('.') < 4:
+                    # group3
+                    group3.append(seq)
+                    break
+            if len(group1) + len(group2) + len(group3) < idx+1:
+                group1.append(seq)
+    
+    return group1, group2, group3
 
 
 def mutate_seq(seq, dist):
@@ -246,11 +346,12 @@ def seq2df(results):
 
 
 if __name__ == "__main__":
+    # ########################################### first version of generated seqs ###########################################
     # # number of seqs to be generated
     # num_seqs = 10000000
     # # specify ss type,
-    # # ssType = '5_term'
-    # ssType = '3_term'
+    # ssType = '5_term'
+    # # ssType = '3_term'
     # ## 5_term for .....(((((((((((........))))))))))) and 3_term for (((((((((((........))))))))))).....
     # ssTemplate = desired_ss[ssType]
 
@@ -290,13 +391,87 @@ if __name__ == "__main__":
     # ## save generated seqs into a fasta file
     # seq2fasta(l_seq_candidate, '/share/project/UltraGen/data/raw/random_generation/CUUGA/stem_loop_CUUGA_primer3_0926_v2.fasta')
 
-    # NOTE: sequences are pre-generated and can be load directly
-    target_seqs = [str(seq_record.seq) for seq_record in SeqIO.parse('/share/project/UltraGen/data/raw/random_generation/CUUGA/stem_loop_CUUGA_5term.fasta', 'fasta')]
-    # target_seqs = [str(seq_record.seq) for seq_record in SeqIO.parse('/share/project/UltraGen/data/raw/random_generation/CUUGA/stem_loop_CUUGA_3term.fasta', 'fasta')]
-
+    ########################################### second version of generated seqs ###########################################
+    # number of seqs to be generated
+    num_seqs = 1000000
+    ## loop candidates
+    print('prepare candidates')
+    l_loop_candidate = []
+    for pad in tqdm(range(4, 8)):
+        l_loop_candidate.extend(gen_loop(fixed='CUUGA', pad_lens=pad))
+    # num_seqs candidates
+    l_pair_candidate = []
+    # the function gen_combination is not utilized as there will be too many seqs when desired sequence length is long
+    for lens in tqdm(range(6, 16)):
+        for repeats in range(int(num_seqs / 10)):
+            l_pair_candidate.append(gen_paired_seq(seq_lens=lens))
+    # sample pairs
+    pairs = random.sample(l_pair_candidate, num_seqs)
+    left_pairs = np.char.array(np.array(pairs)[:, 0])
+    right_pairs = np.char.array(np.array(pairs)[:, 1])
+    # sample loops
+    loops = np.char.array(np.random.choice(l_loop_candidate, size=num_seqs, replace=True))
+    # seqs without primers
+    seqPools = list(left_pairs + loops + right_pairs)
+    # seqs with primers
+    print('padding seqs')
     with mp.Pool(100) as p:
-        results = list(tqdm(p.imap(get_mutant, target_seqs), total=len(target_seqs)))
-    # change results to dataframe
-    df_result = seq2df(results)
-    print('Saving generated {} seqs'.format(len(df_result)))
-    df_result.to_csv('/share/project/UltraGen/data/raw/random_generation/CUUGA/CUUG_5term.csv', index=False)
+        seqPools = list(tqdm(p.imap(pad_seqs, seqPools), total=len(seqPools)))
+    # run ss prediction
+    print('run ss prediction')
+    with mp.Pool(100) as p:
+        ssPools = list(tqdm(p.imap(rnafold, seqPools), total=len(seqPools)))
+    
+    assert len(seqPools) == len(ssPools)
+    # screen seqs with desired ss
+    print('filter seqs')
+    with mp.Pool(100) as p:
+        filters = list(tqdm(p.imap(filter_random_seqs, np.vstack([seqPools, ssPools]).T), total=len(seqPools)))
+    
+    df_result = pd.DataFrame(np.hstack([np.vstack([seqPools, ssPools]).T, np.array(filters)]), columns=['seq', 'ss', 'filter', 'loop_start', 'loop_end'])
+    ## save generated seqs into a fasta file
+    # df_result.to_csv('/share/project/UltraGen/data/raw/random_generation/CUUGA/origin_v2.csv', index=False)
+    df_result.groupby(['filter']).get_group('1').loc[:, ['seq', 'ss', 'loop_start', 'loop_end']].to_csv('/share/project/UltraGen/data/raw/random_generation/CUUGA/origin_v3.csv', index=False)
+
+
+    # NOTE: sequences are pre-generated and can be load directly
+    # target_seqs = [str(seq_record.seq) for seq_record in SeqIO.parse('/share/project/UltraGen/data/raw/random_generation/CUUGA/stem_loop_CUUGA_5term.fasta', 'fasta')]
+    # # target_seqs = [str(seq_record.seq) for seq_record in SeqIO.parse('/share/project/UltraGen/data/raw/random_generation/CUUGA/stem_loop_CUUGA_3term.fasta', 'fasta')]
+
+    # with mp.Pool(100) as p:
+    #     results = list(tqdm(p.imap(get_mutant, target_seqs), total=len(target_seqs)))
+    # # change results to dataframe
+    # df_result = seq2df(results)
+    # print('Saving generated {} seqs'.format(len(df_result)))
+    # df_result.to_csv('/share/project/UltraGen/data/raw/random_generation/CUUGA/CUUG_5term.csv', index=False)
+
+    df_data = pd.read_csv('/share/project/UltraGen/data/raw/random_generation/CUUGA/origin_v3.csv')
+    mutated_seqs = []
+    # random select original seqs to be mutated 500 times, which generate 50w seqs
+    seqPool1 = random.sample(df_data['seq'].tolist(), 1000)
+    for i in tqdm(range(500)):
+        with mp.Pool(100) as p:
+            mutated_seqs.extend(list(p.imap(random_mutate_seq, seqPool1)))
+    # random select original seqs to be mutated 2 time, which generate 50w seqs
+    seqPool2 = random.sample(list(set(df_data['seq']).difference(seqPool1)), 50000)
+    for i in tqdm(range(10)):
+        with mp.Pool(100) as p:
+            mutated_seqs.extend(list(p.imap(random_mutate_seq, seqPool2)))
+
+    print('run ss prediction')
+    with mp.Pool(100) as p:
+        mutated_ss = list(tqdm(p.imap(rnafold, mutated_seqs), total=len(mutated_seqs)))
+
+    group1, group2, group3 = seqPartition(mutated_seqs, mutated_ss)
+
+    print(len(group1), len(group2), len(group3))
+
+    assert len(group1) + len(group2) + len(group3) == len(mutated_seqs)
+
+    pos_seqs = group1 + seqPool1 + seqPool2
+    neg_seqs = group2 + group3
+
+    print(len(pos_seqs), len(neg_seqs))
+
+    seq2fasta(pos_seqs, '/share/project/UltraGen/data/raw/random_generation/CUUGA/pos_v4.fasta')
+    seq2fasta(neg_seqs, '/share/project/UltraGen/data/raw/random_generation/CUUGA/neg_v4.fasta')
